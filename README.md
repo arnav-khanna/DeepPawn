@@ -1,34 +1,23 @@
-# Chess Engine
+# DeepPawn — 5×5 Mini Chess in Rust
 
-A terminal-first chess engine written in Node.js. The project calculates legal moves and supports the main chess rules, including check, checkmate, stalemate, castling, en passant, promotion, pawn double-steps, and draw detection.
+A terminal-first Rust implementation of 5×5 mini chess. The board uses files `a`–`e` and ranks `1`–`5`; pieces have standard chess movement except that pawn double-steps, en passant, and castling are not allowed.
 
-## Features
-
-- Legal move generation for all six piece types
-- King-safety filtering for every move
-- Castling with move-history and attacked-square validation
-- En passant using the immediately previous move
-- Pawn promotion to queen, rook, bishop, or knight
-- Check, checkmate, and stalemate detection
-- Insufficient-material detection
-- Fifty-move and threefold-repetition checks
-- Interactive terminal chess game
-- Direct terminal debugging for engine functions
-- PGN export
-- Structured text-only state export for future AI training
+The starting position gives each side a rook, knight, bishop, queen, king, and five pawns. Pawns promote on rank 5 for White and rank 1 for Black.
 
 ## Requirements
 
-- Node.js 18 or newer
+Rust 1.85 or newer (Rust 2024 edition).
 
-No external npm packages are required.
-
-## Quick start
-
-From the repository root:
+## Run
 
 ```bash
-node terminal/chess.js
+cargo run
+```
+
+## Test
+
+```bash
+cargo test
 ```
 
 ## Terminal commands
@@ -36,13 +25,16 @@ node terminal/chess.js
 ```text
 show                         Display the board and game status
 moves                        List legal moves for the current player
-move e2 e4                   Play a move
-move e7 e8 Q                 Promote a pawn to a chosen piece
+move e2 e3 [Q|R|B|N]         Play a move; promotion defaults to queen
+fen                          Display the current board as 5x5 FEN
+loadfen <fen> [white|black] Replace the game with a 5x5 FEN position
+solve [fen] [white|black] [threads]  Exhaustively solve with CPU workers
+solve5 <fen> [white|black] [threads] Solve a legal K+K+three-piece position
 pgn                          Print the current game as PGN
 savepgn [file]               Save the game as a PGN file
 text                         Print the text-only game state
 savetext [file]              Save the text state to a file
-debug <function> <arguments> Call an engine function directly
+debug <function> [square]    Call an engine function directly
 reset                        Reset to the starting position
 help                         Display command help
 quit                         Exit
@@ -51,106 +43,83 @@ quit                         Exit
 Examples:
 
 ```text
+move e2 e3
 debug pawnMoves e2 white
 debug allLegalMoves - white
 debug isAttacked e4 white
-debug castlingMoves - white
-debug isCheckmate - black
+solve 4k/3Q1/2K2/5/5 black
+loadfen 4k/5/2K2/3Q1/5 white
 ```
 
-## Engine API
-
-The main engine functions are exported from [`functions.js`](./functions.js):
-
-```js
-const chess = require("./functions");
-
-chess.allLegalMoves(board, "white");
-chess.isInCheck(board, "white");
-chess.isCheckmate(board, "white");
-chess.isStalemate(board, "white");
-chess.isAttacked(board, "e", 4, "white");
-chess.isInsufficientMaterial(board);
-chess.isFiftyMoveDraw(halfmoveClock);
-chess.isThreefoldRepetition(positionHistory);
-```
-
-Additional rule modules:
-
-- [`castling.js`](./castling.js)
-- [`en_passant.js`](./en_passant.js)
-- [`pieces/pawn.js`](./pieces/pawn.js)
-
-## Board format
-
-The board is an object keyed by rank. Each square contains a two-character piece code:
-
-```json
-{
-  "8": { "a": "BR", "b": "BN" },
-  "7": { "a": "BP" },
-  "1": { "e": "WK" },
-  "moves": []
-}
-```
-
-Piece codes use `W` or `B` followed by:
+`solve` evaluates every legal continuation, caches transpositions, and prints
+the forced outcome, optimal move(s), result for every legal root move, total
+positions analyzed, elapsed time, and positions per second.
+It applies alpha-beta pruning and reports the number of branches cut off by
+that pruning, cache hits/misses, legal moves generated, and maximum depth.
+Run the solver optimized with `cargo run --release`.
+Pass a worker count to split legal root moves across CPU threads, for example:
 
 ```text
-K King    Q Queen    R Rook
-B Bishop  N Knight   P Pawn
+solve 4k/5/2K2/3Q1/5 white 16
 ```
 
-Move history entries use:
+## Five-piece cluster solving
 
-```js
-{
-  from: { file: "e", rank: 2 },
-  to: { file: "e", rank: 4 }
-}
+`solve5` accepts exactly five pieces: one white king, one black king, and any
+three queens, rooks, bishops, knights, or non-promoted pawns of either colour.
+It rejects malformed positions, duplicate kings, pawns on a promotion rank,
+and positions where the non-moving side is in check.
+
+```text
+solve5 4k/5/2K2/1QRN1/5 white 32
 ```
 
-The `halfmove_clock` counts halfmoves since the last pawn move or capture. It resets to zero after either event and reaches the fifty-move threshold at 100 halfmoves.
-
-## Tests
-
-Run the test suite with:
+On Iridis, submit a position directly with the parameterized Slurm job:
 
 ```bash
-node test.js
+sbatch scripts/iridis_five_piece_solve.sbatch '4k/5/2K2/1QRN1/5' white
 ```
 
-The tests cover piece movement, blocking, captures, king safety, special moves, checkmate, stalemate, and draw rules.
+The job uses all allocated CPUs by default; pass a third argument to set the
+number of solver workers explicitly. It writes the full result to `logs/`.
+
+For multi-worker solves, work is split beneath the root and completed entries
+are shared through a striped transposition table. For multi-node HPC runs,
+submit separate positions or root-move sets as scheduler jobs; ordinary Rust
+threads cannot coordinate separate nodes. Without an explicit worker count,
+the solver runs serially.
+The optional FEN uses five ranks from Black's side down, with uppercase White
+pieces and lowercase Black pieces. For example,
+`4k/3Q1/2K2/5/5` is a checkmated Black king on `e5`.
+Use `fen` to emit the live board and `loadfen` to set a new board. The optional
+side-to-move argument defaults to `white` when loading a position.
+
+An exhaustive search from material-rich positions can be very large. The
+solver is intended primarily for solving endgames and other reduced positions.
+
+## Library API
+
+The public engine API is in [`src/lib.rs`](./src/lib.rs). Key functions include:
+
+```rust
+use deep_pawn::{Board, Color, legal_moves, solve_position, is_in_check, is_checkmate};
+
+let board = Board::default();
+let moves = legal_moves(&board, Color::White);
+assert!(!is_in_check(&board, Color::White));
+assert!(!is_checkmate(&board, Color::White));
+let result = solve_position(&board, Color::White, 0);
+```
 
 ## Project structure
 
 ```text
 .
-├── board/
-│   ├── default_board.json
-│   └── render.js
-├── pieces/
-│   ├── bishop.js
-│   ├── king.js
-│   ├── knight.js
-│   ├── pawn.js
-│   ├── queen.js
-│   └── rook.js
-├── terminal/
-│   ├── chess.js
-│   ├── pgn.js
-│   ├── text_state.js
-│   └── README.md
-├── castling.js
-├── en_passant.js
-├── functions.js
-└── test.js
+├── Cargo.toml
+├── src/
+│   ├── lib.rs       # Engine, move generation, state/PGN text exports, tests
+│   └── main.rs      # Interactive terminal application
+└── target/          # Cargo build output (generated)
 ```
 
-## Contributing
-
-Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and pull-request requirements. The repository also includes a [Code of Conduct](./CODE_OF_CONDUCT.md), [Security Policy](./SECURITY.md), [bug report template](./.github/ISSUE_TEMPLATE/bug_report.md), and [feature request template](./.github/ISSUE_TEMPLATE/feature_request.md).
-
-## License
-
-No license has been selected for this repository yet. Add a `LICENSE` file before publishing if you want to grant reuse rights to others.
+This repository now uses Rust as its sole implementation and supported entry point.

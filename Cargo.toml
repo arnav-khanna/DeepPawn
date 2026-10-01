@@ -1,0 +1,20 @@
+[package]
+name = "deep-pawn"
+version = "0.1.0"
+edition = "2024"
+description = "A terminal-first 5x5 mini chess engine"
+
+[lib]
+name = "deep_pawn"
+path = "src/lib.rs"
+
+[[bin]]
+name = "deep-pawn"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
